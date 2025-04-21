@@ -1,4 +1,5 @@
 import json
+import os
 from typing import Dict, Iterator, List, Literal, Optional, Tuple, Union
 
 from qwen_agent.agents.fncall_agent import FnCallAgent
@@ -61,36 +62,156 @@ class ReActChat(FnCallAgent):
 
         num_llm_calls_available = MAX_LLM_CALL_PER_RUN
         response: str = 'Thought: '
-        while num_llm_calls_available > 0:
-            num_llm_calls_available -= 1
 
-            # Display the streaming response
-            output = []
-            for output in self._call_llm(messages=text_messages):
+        # Start tracing with Langfuse
+        trace = None
+        if self.langfuse:
+            trace_id = kwargs.get("trace_id", None)
+            trace_name = f"{self.name or 'ReActChat'}_run"
+
+            # Convert messages to serializable format for tracing
+            serializable_messages = []
+            # Extract the latest user input if possible
+            latest_user_input = None
+            for msg in messages:
+                try:
+                    msg_data = msg.model_dump() if hasattr(msg, "model_dump") else msg
+                    serializable_messages.append(msg_data)
+                    # Find the latest user message as the primary input
+                    if msg_data.get("role") == "user":
+                        latest_user_input = msg_data
+                except:
+                    # Fallback for dict messages
+                    serializable_messages.append(msg)
+                    if isinstance(msg, dict) and msg.get("role") == "user":
+                        latest_user_input = msg
+
+            # Prepare initial metadata with complete conversation history
+            trace_metadata = {
+                "agent_name": self.name or "ReActChat",
+                "language": lang,
+                "system_message": self.system_message,
+                "conversation_history": serializable_messages
+            }
+
+            # Input should be focused on the user's query or instruction
+            trace_input = {
+                "user_input": latest_user_input["content"] if latest_user_input else None,
+                "language": lang,
+            }
+
+            if trace_id:
+                trace = self.langfuse.trace(
+                    id=trace_id,
+                    name=trace_name,
+                    input=trace_input,
+                    metadata=trace_metadata
+                )
+            else:
+                trace = self.langfuse.trace(
+                    name=trace_name,
+                    input=trace_input,
+                    metadata=trace_metadata
+                )
+
+        try:
+            while num_llm_calls_available > 0:
+                num_llm_calls_available -= 1
+
+                # Start LLM span in Langfuse
+                llm_span = None
+                if self.langfuse and trace:
+                    llm_input = {
+                        "messages": [msg.model_dump() if hasattr(msg, "model_dump") else msg for msg in text_messages],
+                        "extra_generate_cfg": {"lang": lang}
+                    }
+
+                    llm_span = trace.span(
+                        name="llm_call",
+                        input=llm_input,
+                    )
+
+                # Display the streaming response
+                output = []
+                for output in self._call_llm(messages=text_messages):
+                    if output:
+                        yield [Message(role=ASSISTANT, content=response + output[-1].content)]
+
+                # End LLM span in Langfuse
+                if self.langfuse and trace and llm_span:
+                    if output:
+                        llm_span.end(
+                            output={
+                                "output": [msg.model_dump() if hasattr(msg, "model_dump") else msg for msg in output]
+                            }
+                        )
+                    else:
+                        llm_span.end(output={"output": "No output"})
+
+                # Accumulate the current response
                 if output:
-                    yield [Message(role=ASSISTANT, content=response + output[-1].content)]
+                    response += output[-1].content
 
-            # Accumulate the current response
-            if output:
-                response += output[-1].content
+                has_action, action, action_input, thought = self._detect_tool(output[-1].content)
+                if not has_action:
+                    break
 
-            has_action, action, action_input, thought = self._detect_tool(output[-1].content)
-            if not has_action:
-                break
+                # Start Tool span in Langfuse
+                tool_span = None
+                if self.langfuse and trace:
+                    tool_span = trace.span(
+                        name=f"tool_{action}",
+                        input={
+                            "tool_name": action,
+                            "tool_args": action_input,
+                        },
+                    )
 
-            # Add the tool result
-            observation = self._call_tool(action, action_input, messages=messages, **kwargs)
-            observation = f'\nObservation: {observation}\nThought: '
-            response += observation
-            yield [Message(role=ASSISTANT, content=response)]
+                # Add the tool result
+                observation = self._call_tool(action, action_input, messages=messages, trace=trace if self.langfuse else None, **kwargs)
 
-            if (not text_messages[-1].content.endswith('\nThought: ')) and (not thought.startswith('\n')):
-                # Add the '\n' between '\nQuestion:' and the first 'Thought:'
-                text_messages[-1].content += '\n'
-            if action_input.startswith('```'):
-                # Add a newline for proper markdown rendering of code
-                action_input = '\n' + action_input
-            text_messages[-1].content += thought + f'\nAction: {action}\nAction Input: {action_input}' + observation
+                # End Tool span in Langfuse
+                if self.langfuse and trace and tool_span:
+                    tool_span.end(output={"result": observation})
+
+                observation = f'\nObservation: {observation}\nThought: '
+                response += observation
+                yield [Message(role=ASSISTANT, content=response)]
+
+                if (not text_messages[-1].content.endswith('\nThought: ')) and (not thought.startswith('\n')):
+                    # Add the '\n' between '\nQuestion:' and the first 'Thought:'
+                    text_messages[-1].content += '\n'
+                if action_input.startswith('```'):
+                    # Add a newline for proper markdown rendering of code
+                    action_input = '\n' + action_input
+                text_messages[-1].content += thought + f'\nAction: {action}\nAction Input: {action_input}' + observation
+
+            # End the trace successfully
+            if self.langfuse and trace:
+                try:
+                    trace.update(
+                        output={
+                            "response": response
+                        },
+                        status="success"
+                    )
+                except Exception as e:
+                    print(f"Failed to update Langfuse trace: {e}")
+
+        except Exception as e:
+            # End the trace with error if there was an exception
+            if self.langfuse and trace:
+                try:
+                    trace.update(
+                        output={
+                            "error": str(e),
+                            "error_type": type(e).__name__
+                        },
+                        status="error"
+                    )
+                except Exception as trace_err:
+                    print(f"Failed to update Langfuse trace with error: {trace_err}")
+            raise
 
     def _prepend_react_prompt(self, messages: List[Message], lang: Literal['en', 'zh']) -> List[Message]:
         tool_descs = []

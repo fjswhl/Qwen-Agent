@@ -12,6 +12,7 @@ from qwen_agent.tools import TOOL_REGISTRY, BaseTool, MCPManager
 from qwen_agent.tools.base import ToolServiceError
 from qwen_agent.tools.simple_doc_parser import DocParserError
 from qwen_agent.utils.utils import has_chinese_messages, merge_generate_cfgs
+from dotenv import load_dotenv
 
 
 class Agent(ABC):
@@ -39,6 +40,8 @@ class Agent(ABC):
             name: The name of this agent.
             description: The description of this agent, which will be used for multi_agent.
         """
+        load_dotenv()
+
         if isinstance(llm, dict):
             self.llm = get_chat_model(llm)
         else:
