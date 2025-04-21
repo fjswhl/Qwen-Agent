@@ -8,6 +8,9 @@ from qwen_agent.gui import WebUI
 from typing import Optional, Union, Dict
 
 from qwen_agent.tools.base import BaseTool, register_tool
+from dotenv import load_dotenv
+
+load_dotenv()
 
 ROOT_RESOURCE = os.path.join(os.path.dirname(__file__), 'resource')
 
@@ -52,10 +55,11 @@ def init_agent_service():
         "mcpServers": {
             "motiff" : {
                 "command": "npx",
-                    "args": ["-y", "@motiffcom/motiff-mcp-server@latest"],
+                "args": ["-y", "@motiffcom/motiff-mcp-server@latest"],
                 "env": {
-                    "MOTIFF_TOKEN": "HfdIPgQIXew2xZrJ8K9qK3QzuLhOBzP5",
-                    "MOTIFF_HOST": "https://api.motiff.com"
+                    # Load environment variables from .env file
+                    "MOTIFF_TOKEN": os.environ.get("MOTIFF_TOKEN", ""),
+                    "MOTIFF_HOST": os.environ.get("MOTIFF_HOST", "https://api.motiff.com")
                 }
             }
         }
