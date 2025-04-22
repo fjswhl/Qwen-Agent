@@ -53,6 +53,7 @@ setup(
         'requests',
         'tiktoken',
         'langfuse',
+        'langchain'
     ],
     extras_require={
         # Extra dependencies for RAG:

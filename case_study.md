@@ -740,7 +740,6 @@ text_messages[-1].content += thought + f'\nAction: {action}\nAction Input: {acti
 #### LLM 第二次生成
 
 ```text
-{{前面的消息}}
 Thought: 我已成功获取了 Motiff 文档中的指定节点，并生成了对应的 HTML 页面。接下来，我将使用这个 HTML 页面的内容来创建一个 React 项目模板，并在 /tmp 目录下生成相应的 React 组件。
 
 Action: motiff-create_react_project_template
@@ -751,6 +750,7 @@ Observation:
 继续调用工具、返回，然后拼接消息，现在的完整响应是:
 
 ```text
+{{前面的消息}}
 Thought: 我已成功获取了 Motiff 文档中的指定节点，并生成了对应的 HTML 页面。接下来，我将使用这个 HTML 页面的内容来创建一个 React 项目模板，并在 /tmp 目录下生成相应的 React 组件。
 
 Action: motiff-create_react_project_template
